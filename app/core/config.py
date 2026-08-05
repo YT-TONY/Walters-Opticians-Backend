@@ -1,5 +1,5 @@
 import os
-from typing import List, Union
+from typing import List, Optional, Union
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import AnyHttpUrl, validator
 
@@ -9,12 +9,14 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Walters Opticians Backend API"
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api/v1"
+    
+    GEMINI_API_KEY: Optional[str] = None
 
     # Security / JWT
     # Reads SECRET_KEY from .env (generated via secrets.token_hex(32))
-    SECRET_KEY: str = "a79777f9e78bd030ebfa0055947e6a4465cc1b92cc581899185909c4462e0145"
+    SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
 
     # Database Configuration
     DATABASE_URL: str = "sqlite:///./walters_opticians.db"

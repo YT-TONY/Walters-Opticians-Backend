@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 class ProductBase(BaseModel):
@@ -10,7 +10,8 @@ class ProductBase(BaseModel):
     allow_frame_only: bool = True
     price_frame_only_gbp: float
     image_url: str
-    stock_quantity: int = 10
+    stock_quantity: int = Field(default=15, ge=0)
+    is_active: bool = True
     is_featured: bool = False
 
 class ProductCreate(ProductBase):
@@ -25,7 +26,8 @@ class ProductUpdate(BaseModel):
     allow_frame_only: Optional[bool] = None
     price_frame_only_gbp: Optional[float] = None
     image_url: Optional[str] = None
-    stock_quantity: Optional[int] = None
+    stock_quantity: Optional[int] = Field(default=None, ge=0)
+    is_active: Optional[bool] = None
     is_featured: Optional[bool] = None
 
 class ProductResponse(ProductBase):
