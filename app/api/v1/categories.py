@@ -4,9 +4,8 @@ from typing import List
 
 from app.api import deps
 from app.models.categories import Category, SubCategory, Brand
-from app.schemas.category import CategoryResponse, CategoryCreate
 from app.schemas.category import (
-    CategoryUpdate, 
+    CategoryCreate, CategoryUpdate, CategoryResponse,
     SubCategoryCreate, SubCategoryUpdate, SubCategoryResponse,
     BrandCreate, BrandUpdate, BrandResponse
 )
@@ -22,16 +21,17 @@ def get_category_tree(db: Session = Depends(deps.get_db)):
     categories = db.query(Category).order_by(Category.display_order).all()
     return categories
 
-# Example Admin Endpoint (Protect this with your admin dependency)
-@router.post("/", response_model=CategoryResponse)
+# ==========================================
+# MAIN CATEGORIES: CREATE, EDIT & DELETE
+# ==========================================
+
+@router.post("", response_model=CategoryResponse)
 def create_category(
     category_in: CategoryCreate, 
-    db: Session = Depends(deps.get_db),
+    db: Session = Depends(deps.get_db)
     # current_user = Depends(deps.get_current_admin_user) # Uncomment when ready
 ):
-    """
-    Create a new main category (Admin only).
-    """
+    """Create a new main category (Admin only)."""
     db_category = db.query(Category).filter(Category.slug == category_in.slug).first()
     if db_category:
         raise HTTPException(status_code=400, detail="Category with this slug already exists.")
@@ -42,16 +42,11 @@ def create_category(
     db.refresh(new_category)
     return new_category
 
-
-# ==========================================
-# MAIN CATEGORIES: EDIT & DELETE
-# ==========================================
-
 @router.put("/{category_id}", response_model=CategoryResponse)
 def update_category(
     category_id: int,
     category_in: CategoryUpdate,
-    db: Session = Depends(deps.get_db),
+    db: Session = Depends(deps.get_db)
     # current_user = Depends(deps.get_current_admin_user)
 ):
     """Update a main category."""
@@ -70,7 +65,7 @@ def update_category(
 @router.delete("/{category_id}")
 def delete_category(
     category_id: int,
-    db: Session = Depends(deps.get_db),
+    db: Session = Depends(deps.get_db)
     # current_user = Depends(deps.get_current_admin_user)
 ):
     """Delete a main category (cascades to subcategories)."""
@@ -233,4 +228,3 @@ def unlink_brand_from_subcategory(
     db_sub.brands.remove(db_brand)
     db.commit()
     return {"message": f"Successfully removed {db_brand.name} from {db_sub.name}"}
-# Note: You would add similar POST/PUT/DELETE endpoints here for Subcategories and Brands.
