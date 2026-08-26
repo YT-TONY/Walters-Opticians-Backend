@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Table
+from sqlalchemy import Column, DateTime, Integer, String, Boolean, ForeignKey, Table, func
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 
@@ -44,6 +44,7 @@ class Brand(Base):
     name = Column(String, nullable=False)
     slug = Column(String, unique=True, index=True, nullable=False)
     is_popular = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     subcategories = relationship("SubCategory", secondary=subcategory_brand, back_populates="brands")

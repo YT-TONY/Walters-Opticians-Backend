@@ -1,7 +1,7 @@
 import os
 from typing import List, Optional, Union
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import AnyHttpUrl, validator
 
 
 class Settings(BaseSettings):
@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
 
     # Security / JWT
-    # Reads SECRET_KEY from .env (generated via secrets.token_hex(32))
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
@@ -21,13 +20,22 @@ class Settings(BaseSettings):
     # Database Configuration
     DATABASE_URL: str = "sqlite:///./walters_opticians.db"
 
-    # CORS Origins (Supports list parsing or comma-separated strings)
+    # CORS Origins
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
     ]
+
+    @field_validator("BACKEND_CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+        if isinstance(v, str) and not v.startswith("["):
+            return [i.strip() for i in v.split(",") if i.strip()]
+        elif isinstance(v, (list, str)):
+            return v
+        raise ValueError(f"Invalid CORS configuration: {v}")
 
     model_config = SettingsConfigDict(
         env_file=".env",

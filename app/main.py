@@ -26,7 +26,7 @@ app = FastAPI(
 # Set up CORS middleware for frontend clients (React/Next.js/Mobile)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=getattr(settings, "CORS_ORIGINS", ["*"]),
+    allow_origins=settings.BACKEND_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,7 +39,7 @@ app.include_router(orders.router, prefix="/api/v1")
 app.include_router(cart.router, prefix="/api/v1")
 app.include_router(currency.router, prefix="/api/v1")
 app.include_router(ai.router, prefix="/api/v1")
-app.include_router(categories.router, prefix="/api/v1")
+app.include_router(categories.router, prefix="/api/v1/categories", tags=["Categories & Brands"])
 
 @app.get("/", tags=["Health Check"])
 def root():
