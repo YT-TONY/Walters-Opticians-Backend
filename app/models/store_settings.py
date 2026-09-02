@@ -1,3 +1,4 @@
+#app/models/store_settings.py
 from sqlalchemy import Column, Integer, String
 from app.db.base import Base
 

@@ -1,6 +1,10 @@
+# app/api/v1/products.py
 from typing import List, Optional
+
 from urllib.parse import unquote
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin
@@ -8,6 +12,16 @@ from app.models.product import Product
 from app.schemas.product import ProductCreate, ProductResponse, ProductUpdate
 
 router = APIRouter(prefix="/products", tags=["Products & Catalog"])
+
+
+class PaginatedCatalogResponse(BaseModel):
+    items: List[ProductResponse]
+    total_count: int
+    page: int
+    page_size: int
+    total_pages: int
+    available_brands: List[str]
+
 
 # ==========================================
 # FLEXIBLE LOOKUP HELPER
@@ -26,7 +40,6 @@ def find_product(identifier: str, db: Session) -> Optional[Product]:
         if product:
             return product
 
-    # Case-insensitive match for product name
     return db.query(Product).filter(Product.name.ilike(clean_identifier)).first()
 
 
@@ -35,12 +48,24 @@ def find_product(identifier: str, db: Session) -> Optional[Product]:
 # ==========================================
 
 
+@router.get("/brands", response_model=List[str])
+def list_available_brands(db: Session = Depends(get_db)):
+    """
+    Fetches all distinct brand names currently present in the database catalog.
+    """
+    results = db.query(Product.brand).filter(Product.brand.isnot(None), Product.brand != "").distinct().all()
+    brands = sorted([r[0] for r in results if r[0]])
+    return brands
+
+
 @router.get("/", response_model=List[ProductResponse])
 def list_products(
     q: Optional[str] = Query(None, description="Search term for name, brand, shape, or color"),
     brand: Optional[str] = Query(None, description="Filter by brand name"),
-    shape: Optional[str] = Query(None, description="Filter by frame shape (e.g., Round, Square, Aviator)"),
+    shape: Optional[str] = Query(None, description="Filter by frame shape"),
     color: Optional[str] = Query(None, description="Filter by color description"),
+    tier: Optional[str] = Query(None, description="Filter tier: luxury, bridge, budget"),
+    is_bestseller: Optional[bool] = Query(None, description="Filter bestseller items"),
     min_price: Optional[float] = Query(None, description="Minimum price filter in GBP"),
     max_price: Optional[float] = Query(None, description="Maximum price filter in GBP"),
     in_stock_only: bool = Query(False, description="Filter only products currently in stock"),
@@ -50,11 +75,10 @@ def list_products(
     db: Session = Depends(get_db)
 ):
     """
-    Retrieve products catalog with multi-attribute filtering, search, and pagination.
+    Retrieve products catalog with multi-attribute filtering, search, dynamic tier categorization, and pagination.
     """
     query = db.query(Product)
 
-    # Multi-attribute search across Name, Brand, Shape, and Color Description
     if q:
         search_pattern = f"%{q.strip()}%"
         query = query.filter(
@@ -64,13 +88,25 @@ def list_products(
             (Product.color_description.ilike(search_pattern))
         )
 
-    # Specific attribute filters
     if brand:
         query = query.filter(Product.brand.ilike(brand.strip()))
     if shape:
         query = query.filter(Product.shape.ilike(shape.strip()))
     if color:
         query = query.filter(Product.color_description.ilike(color.strip()))
+    if is_bestseller is not None:
+        query = query.filter(Product.is_bestseller == is_bestseller)
+
+    # Dynamic Price Tier Filtering
+    if tier:
+        tier_lower = tier.lower().strip()
+        if tier_lower == "luxury":
+            query = query.filter(Product.price_full_gbp >= 200.0)
+        elif tier_lower == "budget":
+            query = query.filter(Product.price_full_gbp <= 100.0)
+        elif tier_lower == "bridge":
+            query = query.filter(Product.price_full_gbp > 100.0, Product.price_full_gbp < 200.0)
+
     if min_price is not None:
         query = query.filter(Product.price_full_gbp >= min_price)
     if max_price is not None:
@@ -78,7 +114,6 @@ def list_products(
     if in_stock_only:
         query = query.filter(Product.stock_quantity > 0)
 
-    # Sorting
     if sort_by == "price_asc":
         query = query.order_by(Product.price_full_gbp.asc())
     elif sort_by == "price_desc":
@@ -87,6 +122,56 @@ def list_products(
         query = query.order_by(Product.id.desc())
 
     return query.offset(skip).limit(limit).all()
+
+
+@router.get("/admin/catalog", response_model=PaginatedCatalogResponse)
+def get_admin_product_catalog(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    search: Optional[str] = Query(default=None),
+    brand: Optional[str] = Query(default=None),
+    shape: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    admin=Depends(require_admin)
+):
+    """
+    Optimized paginated query for large inventory sizes (12,000+ items) with dynamic brand list.
+    """
+    query = db.query(Product)
+
+    if brand and brand.lower() != "all":
+        query = query.filter(func.lower(Product.brand) == brand.lower())
+
+    if shape and shape.lower() != "all":
+        query = query.filter(func.lower(Product.shape) == shape.lower())
+
+    if search:
+        search_pattern = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                Product.name.ilike(search_pattern),
+                Product.brand.ilike(search_pattern),
+                Product.color_description.ilike(search_pattern)
+            )
+        )
+
+    total_count = query.count()
+    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+
+    products = query.order_by(Product.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+
+    # Extract dynamic brands from database
+    brand_results = db.query(Product.brand).filter(Product.brand.isnot(None), Product.brand != "").distinct().all()
+    available_brands = sorted([b[0] for b in brand_results if b[0]])
+
+    return {
+        "items": products,
+        "total_count": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "available_brands": available_brands
+    }
 
 
 @router.get("/{identifier}", response_model=ProductResponse)
