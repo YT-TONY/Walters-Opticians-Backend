@@ -31,3 +31,4 @@ Thumbs.db
 
 clear_db.py
 seed.py
+seed_categories.py
