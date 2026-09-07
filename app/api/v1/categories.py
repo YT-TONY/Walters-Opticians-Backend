@@ -1,5 +1,7 @@
 #app/api/v1/categories.py
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException,UploadFile, File, Form
+import shutil
+import os
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
@@ -10,6 +12,9 @@ from app.schemas.category import (
     SubCategoryCreate, SubCategoryUpdate, SubCategoryResponse,
     BrandCreate, BrandUpdate, BrandResponse,MegaMenuBannerResponse, MegaMenuBannerCreate
 )
+
+UPLOAD_DIR = "public/IMAGES/BRAND LOGO"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 router = APIRouter()
 
@@ -26,6 +31,39 @@ def get_category_tree(db: Session = Depends(deps.get_db)):
 # ==========================================
 # BRANDS DIRECT ENDPOINTS (FOR BRANDS TAB)
 # ==========================================
+
+
+@router.post("/brands/{brand_id}/upload-logo")
+async def upload_brand_logo(
+    brand_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(deps.get_db)
+):
+    """
+    Upload a brand logo (PNG, recommended 600x300 canvas).
+    Updates brand.logo_url directly.
+    """
+    if not file.content_type.startswith("image/png"):
+        raise HTTPException(status_code=400, detail="Only transparent PNG files are allowed for brand logos.")
+
+    db_brand = db.query(Brand).filter(Brand.id == brand_id).first()
+    if not db_brand:
+        raise HTTPException(status_code=404, detail="Brand not found")
+
+    # Generate standardized filename
+    filename = f"{db_brand.slug}_logo.png"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # Update logo URL path
+    db_brand.logo_url = f"/IMAGES/BRAND LOGO/{filename}"
+    db.commit()
+    db.refresh(db_brand)
+
+    return {"message": "Logo uploaded successfully", "logo_url": db_brand.logo_url}
 
 @router.get("/brands/all", response_model=List[BrandResponse])
 def get_all_brands(
