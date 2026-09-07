@@ -1,24 +1,37 @@
-#app/schemas/category.py
+# app/schemas/category.py
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
+from datetime import datetime
 
 # --- BRAND SCHEMAS ---
 class BrandBase(BaseModel):
     name: str
     slug: str
+    logo_url: Optional[str] = None
     is_popular: bool = False
+    is_top_brand: bool = False
+    promo_tag: Optional[str] = None
+    category_type: str = "both"
+    sales_count: int = 0
 
 class BrandCreate(BrandBase):
     pass
 
 class BrandResponse(BrandBase):
     id: int
+    created_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
     
 class BrandUpdate(BaseModel):
     name: Optional[str] = None
     slug: Optional[str] = None
+    logo_url: Optional[str] = None
     is_popular: Optional[bool] = None
+    is_top_brand: Optional[bool] = None
+    promo_tag: Optional[str] = None
+    category_type: Optional[str] = None
+    sales_count: Optional[int] = None
+
 
 # --- SUBCATEGORY SCHEMAS ---
 class SubCategoryBase(BaseModel):
@@ -40,6 +53,8 @@ class SubCategoryUpdate(BaseModel):
     name: Optional[str] = None
     slug: Optional[str] = None
     display_order: Optional[int] = None
+
+
 # --- CATEGORY SCHEMAS ---
 class CategoryBase(BaseModel):
     name: str
@@ -60,3 +75,21 @@ class CategoryUpdate(BaseModel):
     slug: Optional[str] = None
     is_main_nav: Optional[bool] = None
     display_order: Optional[int] = None
+
+
+# --- BANNER SCHEMAS ---
+class MegaMenuBannerBase(BaseModel):
+    tab_slug: str
+    title: str
+    subtitle: Optional[str] = None
+    image_url: str
+    target_url: str
+    display_order: int = 0
+    is_active: bool = True
+
+class MegaMenuBannerCreate(MegaMenuBannerBase):
+    pass
+
+class MegaMenuBannerResponse(MegaMenuBannerBase):
+    id: int
+    model_config = ConfigDict(from_attributes=True)

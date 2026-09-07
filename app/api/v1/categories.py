@@ -1,14 +1,14 @@
 #app/api/v1/categories.py
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from app.api import deps
-from app.models.categories import Category, SubCategory, Brand
+from app.models.categories import Category, SubCategory, Brand, MegaMenuBanner
 from app.schemas.category import (
     CategoryCreate, CategoryUpdate, CategoryResponse,
     SubCategoryCreate, SubCategoryUpdate, SubCategoryResponse,
-    BrandCreate, BrandUpdate, BrandResponse
+    BrandCreate, BrandUpdate, BrandResponse,MegaMenuBannerResponse, MegaMenuBannerCreate
 )
 
 router = APIRouter()
@@ -21,6 +21,55 @@ def get_category_tree(db: Session = Depends(deps.get_db)):
     """
     categories = db.query(Category).order_by(Category.display_order).all()
     return categories
+
+
+# ==========================================
+# BRANDS DIRECT ENDPOINTS (FOR BRANDS TAB)
+# ==========================================
+
+@router.get("/brands/all", response_model=List[BrandResponse])
+def get_all_brands(
+    category_type: Optional[str] = None,  # "glasses", "sunglasses", or None for all
+    top_only: bool = False,
+    db: Session = Depends(deps.get_db)
+):
+    """
+    Fetch all brands for the dedicated Brands mega-menu tab.
+    Supports filtering by category_type and sorting Top Brands by sales volume.
+    """
+    query = db.query(Brand)
+    
+    if category_type:
+        query = query.filter(Brand.category_type.in_([category_type, "both"]))
+        
+    if top_only:
+        query = query.filter((Brand.is_top_brand == True) | (Brand.is_popular == True)).order_by(Brand.sales_count.desc())
+    else:
+        query = query.order_by(Brand.name.asc())
+        
+    return query.all()
+
+
+# ==========================================
+# MEGA-MENU BANNERS (ADMIN CONTROLLED)
+# ==========================================
+
+@router.get("/banners/{tab_slug}", response_model=List[MegaMenuBannerResponse])
+def get_banners_for_tab(tab_slug: str, db: Session = Depends(deps.get_db)):
+    """Fetch active dynamic side banners for a specific mega-menu tab."""
+    return db.query(MegaMenuBanner).filter(
+        MegaMenuBanner.tab_slug == tab_slug,
+        MegaMenuBanner.is_active == True
+    ).order_by(MegaMenuBanner.display_order).all()
+
+@router.post("/banners", response_model=MegaMenuBannerResponse)
+def create_banner(banner_in: MegaMenuBannerCreate, db: Session = Depends(deps.get_db)):
+    """Create a new mega-menu promotional banner (Admin)."""
+    new_banner = MegaMenuBanner(**banner_in.model_dump())
+    db.add(new_banner)
+    db.commit()
+    db.refresh(new_banner)
+    return new_banner
 
 # ==========================================
 # MAIN CATEGORIES: CREATE, EDIT & DELETE
