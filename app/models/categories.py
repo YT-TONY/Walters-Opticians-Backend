@@ -1,3 +1,4 @@
+#app/models/categories.py
 from sqlalchemy import Column, DateTime, Integer, String, Boolean, ForeignKey, Table, func
 from sqlalchemy.orm import relationship
 from app.db.base import Base

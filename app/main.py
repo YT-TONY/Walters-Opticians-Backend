@@ -1,7 +1,8 @@
+#app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import ai, auth, cart, currency, orders, products, categories
+from app.api.v1 import ai, auth, cart, currency, orders, products, categories,admin
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import engine
@@ -40,6 +41,7 @@ app.include_router(cart.router, prefix="/api/v1")
 app.include_router(currency.router, prefix="/api/v1")
 app.include_router(ai.router, prefix="/api/v1")
 app.include_router(categories.router, prefix="/api/v1/categories", tags=["Categories & Brands"])
+app.include_router(admin.router, prefix="/api/v1", tags=["Admin Analytics & Management"])
 
 @app.get("/", tags=["Health Check"])
 def root():
