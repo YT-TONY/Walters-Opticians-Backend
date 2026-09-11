@@ -44,17 +44,18 @@ class Brand(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     slug = Column(String, unique=True, index=True, nullable=False)
-    logo_url = Column(String, nullable=True)
+    logo_url = Column(String, nullable=True)          # Logo (URL or uploaded static path)
+    hero_image_url = Column(String, nullable=True)    # Hero/Banner image for recommended grid
+    tagline = Column(String, nullable=True)           # Custom brand headline set by admin
     is_popular = Column(Boolean, default=False)
-    is_top_brand = Column(Boolean, default=False)  # Admin manual toggle for Top Brands grid
-    promo_tag = Column(String, nullable=True)      # e.g. "50% OFF", "LUXURY", "LIMITED"
-    category_type = Column(String, default="both") # "glasses", "sunglasses", or "both"
-    sales_count = Column(Integer, default=0)       # Auto-sorting for Top Brands
+    is_top_brand = Column(Boolean, default=False)     # Admin manual toggle for Top Brands grid
+    promo_tag = Column(String, nullable=True)         # e.g. "50% OFF", "LUXURY", "LIMITED"
+    category_type = Column(String, default="both")    # "glasses", "sunglasses", or "both"
+    sales_count = Column(Integer, default=0)          # Auto-sorting for Top Brands
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     subcategories = relationship("SubCategory", secondary=subcategory_brand, back_populates="brands")
-
 
 class MegaMenuBanner(Base):
     __tablename__ = "megamenu_banners"

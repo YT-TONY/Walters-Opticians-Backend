@@ -1,5 +1,5 @@
-#app/api/v1/categories.py
-from fastapi import APIRouter, Depends, HTTPException,UploadFile, File, Form
+# app/api/v1/categories.py
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 import shutil
 import os
 from sqlalchemy.orm import Session
@@ -10,11 +10,15 @@ from app.models.categories import Category, SubCategory, Brand, MegaMenuBanner
 from app.schemas.category import (
     CategoryCreate, CategoryUpdate, CategoryResponse,
     SubCategoryCreate, SubCategoryUpdate, SubCategoryResponse,
-    BrandCreate, BrandUpdate, BrandResponse,MegaMenuBannerResponse, MegaMenuBannerCreate
+    BrandCreate, BrandUpdate, BrandResponse,
+    MegaMenuBannerResponse, MegaMenuBannerCreate, RecommendedBrandResponse
 )
 
 UPLOAD_DIR = "public/IMAGES/BRAND LOGO"
+HERO_UPLOAD_DIR = "public/IMAGES/BRAND HERO"
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(HERO_UPLOAD_DIR, exist_ok=True)
 
 router = APIRouter()
 
@@ -65,6 +69,38 @@ async def upload_brand_logo(
 
     return {"message": "Logo uploaded successfully", "logo_url": db_brand.logo_url}
 
+
+@router.post("/brands/{brand_id}/upload-hero")
+async def upload_brand_hero(
+    brand_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(deps.get_db)
+):
+    """
+    Upload a brand hero banner image (JPEG, PNG, WEBP).
+    Updates brand.hero_image_url directly with local static asset path.
+    """
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Only image files are allowed for brand banners.")
+
+    db_brand = db.query(Brand).filter(Brand.id == brand_id).first()
+    if not db_brand:
+        raise HTTPException(status_code=404, detail="Brand not found")
+
+    ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+    filename = f"{db_brand.slug}_hero.{ext}"
+    file_path = os.path.join(HERO_UPLOAD_DIR, filename)
+
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    db_brand.hero_image_url = f"/IMAGES/BRAND HERO/{filename}"
+    db.commit()
+    db.refresh(db_brand)
+
+    return {"message": "Hero banner uploaded successfully", "hero_image_url": db_brand.hero_image_url}
+
+
 @router.get("/brands/all", response_model=List[BrandResponse])
 def get_all_brands(
     category_type: Optional[str] = None,  # "glasses", "sunglasses", or None for all
@@ -87,6 +123,74 @@ def get_all_brands(
         
     return query.all()
 
+
+@router.get("/brands/recommended", response_model=List[RecommendedBrandResponse])
+def get_recommended_brands(
+    user_searches: Optional[str] = None,  # Comma-separated search terms or slugs
+    db: Session = Depends(deps.get_db)
+):
+    """
+    Computes personalized brand recommendations based on user search activity
+    combined with overall sales volume. Uses dynamic admin database fields.
+    """
+    searched_slugs = []
+    if user_searches:
+        searched_slugs = [s.strip().lower() for s in user_searches.split(",") if s.strip()]
+
+    recommended_brands = []
+
+    # 1. Match brands based on search history keywords or slugs
+    if searched_slugs:
+        for query_term in searched_slugs[:3]:
+            matched = db.query(Brand).filter(
+                (Brand.slug.ilike(f"%{query_term}%")) | (Brand.name.ilike(f"%{query_term}%"))
+            ).first()
+            if matched and matched not in recommended_brands:
+                recommended_brands.append(matched)
+
+    # 2. Backfill up to 3 items using top sales_count and popular status
+    if len(recommended_brands) < 3:
+        existing_ids = {b.id for b in recommended_brands}
+        fallback_query = db.query(Brand)
+        if existing_ids:
+            fallback_query = fallback_query.filter(Brand.id.not_in(existing_ids))
+        
+        top_sales = fallback_query.order_by(
+            Brand.sales_count.desc(), 
+            Brand.is_popular.desc()
+        ).limit(3 - len(recommended_brands)).all()
+        
+        recommended_brands.extend(top_sales)
+
+    # Default fallback images if admin hasn't configured custom hero_image_url or tagline yet
+    DEFAULT_HEROES = [
+        "/IMAGES/HOMEPAGE/LUXURY_BANNER.jpg",
+        "/IMAGES/HOMEPAGE/BUDGET_BANNER.jpg",
+        "/IMAGES/HOMEPAGE/DISCOUNT_BANNER.jpg"
+    ]
+
+    result = []
+    for idx, brand in enumerate(recommended_brands[:3]):
+        # Dynamic precedence: Admin database field -> Fallback local asset
+        hero_url = brand.hero_image_url or DEFAULT_HEROES[idx % len(DEFAULT_HEROES)]
+        tagline_str = brand.tagline or f"Explore Precision Crafted {brand.name} Eyewear"
+
+        result.append(
+            RecommendedBrandResponse(
+                id=brand.id,
+                name=brand.name,
+                slug=brand.slug,
+                logo_url=brand.logo_url,
+                hero_image_url=hero_url,
+                tagline=tagline_str,
+                category_type=brand.category_type or "both",
+                sales_count=brand.sales_count,
+                is_popular=brand.is_popular,
+                badge_text=brand.promo_tag or ("RECOMMENDED" if idx == 0 else "POPULAR")
+            )
+        )
+
+    return result
 
 # ==========================================
 # MEGA-MENU BANNERS (ADMIN CONTROLLED)
@@ -117,7 +221,6 @@ def create_banner(banner_in: MegaMenuBannerCreate, db: Session = Depends(deps.ge
 def create_category(
     category_in: CategoryCreate, 
     db: Session = Depends(deps.get_db)
-    # current_user = Depends(deps.get_current_admin_user) # Uncomment when ready
 ):
     """Create a new main category (Admin only)."""
     db_category = db.query(Category).filter(Category.slug == category_in.slug).first()
@@ -135,7 +238,6 @@ def update_category(
     category_id: int,
     category_in: CategoryUpdate,
     db: Session = Depends(deps.get_db)
-    # current_user = Depends(deps.get_current_admin_user)
 ):
     """Update a main category."""
     db_category = db.query(Category).filter(Category.id == category_id).first()
@@ -154,7 +256,6 @@ def update_category(
 def delete_category(
     category_id: int,
     db: Session = Depends(deps.get_db)
-    # current_user = Depends(deps.get_current_admin_user)
 ):
     """Delete a main category (cascades to subcategories)."""
     db_category = db.query(Category).filter(Category.id == category_id).first()
@@ -176,7 +277,6 @@ def create_subcategory(
     db: Session = Depends(deps.get_db)
 ):
     """Create a new subcategory."""
-    # Verify parent category exists
     parent_cat = db.query(Category).filter(Category.id == sub_in.category_id).first()
     if not parent_cat:
         raise HTTPException(status_code=404, detail="Parent category not found")
@@ -283,7 +383,7 @@ def link_brand_to_subcategory(
     brand_id: int,
     db: Session = Depends(deps.get_db)
 ):
-    """Link a brand to a specific subcategory (e.g. mapping 'Ray-Ban' to 'Sunglasses -> Lifestyle')."""
+    """Link a brand to a specific subcategory."""
     db_sub = db.query(SubCategory).filter(SubCategory.id == subcategory_id).first()
     db_brand = db.query(Brand).filter(Brand.id == brand_id).first()
     

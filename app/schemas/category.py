@@ -8,6 +8,8 @@ class BrandBase(BaseModel):
     name: str
     slug: str
     logo_url: Optional[str] = None
+    hero_image_url: Optional[str] = None  # Accepts uploaded path or external URL
+    tagline: Optional[str] = None         # Admin tagline input
     is_popular: bool = False
     is_top_brand: bool = False
     promo_tag: Optional[str] = None
@@ -26,11 +28,26 @@ class BrandUpdate(BaseModel):
     name: Optional[str] = None
     slug: Optional[str] = None
     logo_url: Optional[str] = None
+    hero_image_url: Optional[str] = None
+    tagline: Optional[str] = None
     is_popular: Optional[bool] = None
     is_top_brand: Optional[bool] = None
     promo_tag: Optional[str] = None
     category_type: Optional[str] = None
     sales_count: Optional[int] = None
+
+class RecommendedBrandResponse(BaseModel):
+    id: int
+    name: str
+    slug: str
+    logo_url: Optional[str] = None
+    hero_image_url: Optional[str] = None
+    tagline: Optional[str] = None
+    category_type: str = "both"
+    sales_count: int = 0
+    is_popular: bool = False
+    badge_text: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
 
 
 # --- SUBCATEGORY SCHEMAS ---
@@ -93,3 +110,4 @@ class MegaMenuBannerCreate(MegaMenuBannerBase):
 class MegaMenuBannerResponse(MegaMenuBannerBase):
     id: int
     model_config = ConfigDict(from_attributes=True)
+    
