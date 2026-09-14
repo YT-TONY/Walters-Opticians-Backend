@@ -85,9 +85,23 @@ BRAND_DATA = [
     {"name": "Carrera", "category_type": "sunglasses"},
     {"name": "DSL 55", "category_type": "sunglasses"},
     {"name": "Nautica", "category_type": "sunglasses"},
+
+    # CONTACT LENSES BRANDS
+    {"name": "Acuvue", "category_type": "contact_lenses"},
+    {"name": "Air Optix", "category_type": "contact_lenses"},
+    {"name": "Avaira", "category_type": "contact_lenses"},
+    {"name": "Biofinity", "category_type": "contact_lenses"},
+    {"name": "Clariti", "category_type": "contact_lenses"},
+    {"name": "SofLens", "category_type": "contact_lenses"},
+    {"name": "Dailies", "category_type": "contact_lenses"},
+    {"name": "Proclear", "category_type": "contact_lenses"},
+    {"name": "MyDay", "category_type": "contact_lenses"},
+    {"name": "Bausch + Lomb", "category_type": "contact_lenses"},
+    {"name": "CooperVision", "category_type": "contact_lenses"},
+    {"name": "Alcon", "category_type": "contact_lenses"},
 ]
 
-SUBCATEGORY_NAMES = [
+GLASSES_SUBCATEGORY_NAMES = [
     "Women's Glasses",
     "Men's Glasses",
     "Kids' Glasses",
@@ -100,7 +114,22 @@ SUBCATEGORY_NAMES = [
     "Sale"
 ]
 
-POPULAR_BRANDS = {"Ray-Ban", "Gucci", "Tom Ford", "Oakley", "Prada", "Burberry", "Chanel", "Versace"}
+CONTACT_LENS_SUBCATEGORY_NAMES = [
+    "Daily Disposables",
+    "Bi-Weekly Lenses",
+    "Monthly Lenses",
+    "Spherical Lenses",
+    "Toric Lenses",
+    "Multifocal Lenses",
+    "Coloured Contact Lenses",
+    "Silicone Hydrogel Lenses",
+    "Ortho-K & Myopia Care"
+]
+
+POPULAR_BRANDS = {
+    "Ray-Ban", "Gucci", "Tom Ford", "Oakley", "Prada", "Burberry", 
+    "Chanel", "Versace", "Acuvue", "Biofinity", "Air Optix", "Dailies"
+}
 
 def slugify(text: str) -> str:
     text = text.lower().replace("'", "").replace("&", "and")
@@ -128,11 +157,21 @@ def seed_database():
         db.add_all([cat_glasses, cat_sunglasses, cat_lenses, cat_notice, cat_contacts, cat_sale])
         db.commit()
 
-        print("Seeding Subcategories...")
+        print("Seeding Optical Subcategories...")
         subcategories_dict = {}
-        for sub_name in SUBCATEGORY_NAMES:
+        for sub_name in GLASSES_SUBCATEGORY_NAMES:
             sub_obj = SubCategory(
                 category_id=cat_glasses.id,
+                name=sub_name,
+                slug=slugify(sub_name)
+            )
+            db.add(sub_obj)
+            subcategories_dict[sub_name] = sub_obj
+
+        print("Seeding Contact Lens Subcategories...")
+        for sub_name in CONTACT_LENS_SUBCATEGORY_NAMES:
+            sub_obj = SubCategory(
+                category_id=cat_contacts.id,
                 name=sub_name,
                 slug=slugify(sub_name)
             )
@@ -161,20 +200,27 @@ def seed_database():
 
         print("Linking Brands to Subcategories...")
         for brand_name, brand_obj in brands_dict.items():
-            if brand_obj.is_popular:
-                subcategories_dict["Best Sellers"].brands.append(brand_obj)
-                subcategories_dict["New Arrivals"].brands.append(brand_obj)
+            if brand_obj.category_type in ["glasses", "sunglasses", "both"]:
+                if brand_obj.is_popular:
+                    subcategories_dict["Best Sellers"].brands.append(brand_obj)
+                    subcategories_dict["New Arrivals"].brands.append(brand_obj)
 
-            if "Ray-Ban" in brand_name:
-                subcategories_dict["Ray-Ban Meta"].brands.append(brand_obj)
-            elif "Oakley" in brand_name:
-                subcategories_dict["Oakley Meta"].brands.append(brand_obj)
+                if "Ray-Ban" in brand_name:
+                    subcategories_dict["Ray-Ban Meta"].brands.append(brand_obj)
+                elif "Oakley" in brand_name:
+                    subcategories_dict["Oakley Meta"].brands.append(brand_obj)
 
-            subcategories_dict["Women's Glasses"].brands.append(brand_obj)
-            subcategories_dict["Men's Glasses"].brands.append(brand_obj)
+                subcategories_dict["Women's Glasses"].brands.append(brand_obj)
+                subcategories_dict["Men's Glasses"].brands.append(brand_obj)
+
+            elif brand_obj.category_type == "contact_lenses":
+                # Link Contact Lens Brands to standard contact lens subcategories
+                subcategories_dict["Daily Disposables"].brands.append(brand_obj)
+                subcategories_dict["Monthly Lenses"].brands.append(brand_obj)
+                subcategories_dict["Spherical Lenses"].brands.append(brand_obj)
 
         db.commit()
-        print("Successfully seeded all categories, subcategories, and categorized brands!")
+        print("Successfully seeded all categories, optical & contact lens subcategories, and brands!")
 
     except Exception as e:
         print(f"Error seeding database: {e}")

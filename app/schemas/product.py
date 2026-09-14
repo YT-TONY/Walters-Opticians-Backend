@@ -1,8 +1,26 @@
 #app/schemas/product.py
+
 from pydantic import BaseModel, Field
 from typing import Optional, List
+from app.models.enums import ProductCategory, ReplacementFrequency, LensDesign
+
+class ContactLensDetailResponse(BaseModel):
+    id: int
+    replacement_frequency: ReplacementFrequency
+    lens_design: LensDesign
+    pack_size: int
+    water_content: Optional[float] = None
+    material_type: Optional[str] = None
+    base_curve_options: str
+    diameter_options: str
+    min_power: float
+    max_power: float
+
+    class Config:
+        from_attributes = True
 
 class ProductBase(BaseModel):
+    category: Optional[ProductCategory] = ProductCategory.OPTICAL_FRAMES
     model_code: Optional[str] = None
     name: str
     brand: str
@@ -44,6 +62,7 @@ class ProductCreate(ProductBase):
     pass
 
 class ProductUpdate(BaseModel):
+    category: Optional[ProductCategory] = None
     model_code: Optional[str] = None
     name: Optional[str] = None
     brand: Optional[str] = None
@@ -78,6 +97,7 @@ class ProductUpdate(BaseModel):
 
 class ProductResponse(ProductBase):
     id: int
+    contact_lens_detail: Optional[ContactLensDetailResponse] = None
 
     class Config:
         from_attributes = True

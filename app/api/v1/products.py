@@ -1,13 +1,14 @@
 # app/api/v1/products.py
 from typing import List, Optional
-
 from urllib.parse import unquote
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_db, require_admin
+from app.models.enums import ProductCategory
 from app.models.product import Product
 from app.schemas.product import ProductCreate, ProductResponse, ProductUpdate
 
@@ -32,15 +33,17 @@ def find_product(identifier: str, db: Session) -> Optional[Product]:
     """
     Finds a product by numeric ID if identifier contains digits, 
     otherwise falls back to a case-insensitive exact name match (URL-decoded).
+    Eagerly loads contact_lens_detail.
     """
     clean_identifier = unquote(identifier).strip()
+    query = db.query(Product).options(joinedload(Product.contact_lens_detail))
 
     if clean_identifier.isdigit():
-        product = db.query(Product).filter(Product.id == int(clean_identifier)).first()
+        product = query.filter(Product.id == int(clean_identifier)).first()
         if product:
             return product
 
-    return db.query(Product).filter(Product.name.ilike(clean_identifier)).first()
+    return query.filter(Product.name.ilike(clean_identifier)).first()
 
 
 # ==========================================
@@ -61,6 +64,7 @@ def list_available_brands(db: Session = Depends(get_db)):
 @router.get("/", response_model=List[ProductResponse])
 def list_products(
     q: Optional[str] = Query(None, description="Search term for name, brand, shape, or color"),
+    category: Optional[ProductCategory] = Query(None, description="Filter by category: optical_frames, sunglasses, contact_lenses, lens_care"),
     brand: Optional[str] = Query(None, description="Filter by brand name"),
     shape: Optional[str] = Query(None, description="Filter by frame shape"),
     color: Optional[str] = Query(None, description="Filter by color description"),
@@ -75,9 +79,13 @@ def list_products(
     db: Session = Depends(get_db)
 ):
     """
-    Retrieve products catalog with multi-attribute filtering, search, dynamic tier categorization, and pagination.
+    Retrieve products catalog with multi-attribute filtering, search, category filtering, and pagination.
+    Eagerly loads contact lens metadata.
     """
-    query = db.query(Product)
+    query = db.query(Product).options(joinedload(Product.contact_lens_detail)).filter(Product.is_active == True)
+
+    if category:
+        query = query.filter(Product.category == category)
 
     if q:
         search_pattern = f"%{q.strip()}%"
@@ -135,9 +143,9 @@ def get_admin_product_catalog(
     admin=Depends(require_admin)
 ):
     """
-    Optimized paginated query for large inventory sizes (12,000+ items) with dynamic brand list.
+    Optimized paginated query for large inventory sizes with dynamic brand list.
     """
-    query = db.query(Product)
+    query = db.query(Product).options(joinedload(Product.contact_lens_detail))
 
     if brand and brand.lower() != "all":
         query = query.filter(func.lower(Product.brand) == brand.lower())

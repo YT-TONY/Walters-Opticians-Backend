@@ -1,11 +1,15 @@
 #app/models/product.py
-from sqlalchemy import Column, Integer, String, Float, Boolean, Text, JSON
+
+from sqlalchemy import Column, Integer, String, Float, Boolean, Text, JSON, Enum
+from sqlalchemy.orm import relationship
 from app.db.base import Base
+from app.models.enums import ProductCategory
 
 class Product(Base):
     __tablename__ = "products"
 
     id = Column(Integer, primary_key=True, index=True)
+    category = Column(Enum(ProductCategory), default=ProductCategory.OPTICAL_FRAMES, nullable=False, index=True)
     model_code = Column(String, index=True, nullable=True)
     name = Column(String, index=True, nullable=False)
     brand = Column(String, index=True, nullable=False)
@@ -47,3 +51,11 @@ class Product(Base):
     is_active = Column(Boolean, index=True, default=True, nullable=False)
     is_featured = Column(Boolean, default=False)
     is_bestseller = Column(Boolean, default=False)
+
+    # One-to-One Contact Lens Extension
+    contact_lens_detail = relationship(
+        "ContactLensProductDetail", 
+        back_populates="product", 
+        uselist=False, 
+        cascade="all, delete-orphan"
+    )
