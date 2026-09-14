@@ -1,3 +1,4 @@
+#app/models/user.py
 import enum
 from sqlalchemy import Column, Integer, String, Enum, Boolean, DateTime
 from datetime import datetime
