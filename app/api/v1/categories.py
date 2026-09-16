@@ -360,6 +360,17 @@ def update_brand(
     db.refresh(db_brand)
     return db_brand
 
+@router.get("/brands/by-slug/{slug}", response_model=BrandResponse)
+def get_brand_by_slug(
+    slug: str,
+    db: Session = Depends(deps.get_db)
+):
+    """Fetch a single brand by its URL slug (for /brands/:brandSlug PDP pages)."""
+    db_brand = db.query(Brand).filter(Brand.slug == slug).first()
+    if not db_brand:
+        raise HTTPException(status_code=404, detail="Brand not found")
+    return db_brand
+
 @router.delete("/brands/{brand_id}")
 def delete_brand(
     brand_id: int,
