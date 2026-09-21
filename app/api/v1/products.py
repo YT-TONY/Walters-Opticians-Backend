@@ -65,26 +65,33 @@ def list_available_brands(db: Session = Depends(get_db)):
 def list_products(
     q: Optional[str] = Query(None, description="Search term for name, brand, shape, or color"),
     category: Optional[ProductCategory] = Query(None, description="Filter by category: optical_frames, sunglasses, contact_lenses, lens_care"),
+    eyewear_only: bool = Query(False, description="If True, strictly returns Optical Frames & Sunglasses (excludes contact lenses & lens care)"),
     brand: Optional[str] = Query(None, description="Filter by brand name"),
     shape: Optional[str] = Query(None, description="Filter by frame shape"),
     color: Optional[str] = Query(None, description="Filter by color description"),
     tier: Optional[str] = Query(None, description="Filter tier: luxury, bridge, budget"),
     is_bestseller: Optional[bool] = Query(None, description="Filter bestseller items"),
+    is_featured: Optional[bool] = Query(None, description="Filter featured items"),
     min_price: Optional[float] = Query(None, description="Minimum price filter in GBP"),
     max_price: Optional[float] = Query(None, description="Maximum price filter in GBP"),
     in_stock_only: bool = Query(False, description="Filter only products currently in stock"),
     sort_by: Optional[str] = Query("newest", description="Sort order: price_asc, price_desc, newest"),
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=500),
     db: Session = Depends(get_db)
 ):
     """
-    Retrieve products catalog with multi-attribute filtering, search, category filtering, and pagination.
+    Retrieve products catalog with multi-attribute filtering, search, category filtering, and server-side pagination.
     Eagerly loads contact lens metadata.
     """
     query = db.query(Product).options(joinedload(Product.contact_lens_detail)).filter(Product.is_active == True)
 
-    if category:
+    # Filter out Contact Lenses & Lens Care if eyewear_only is True
+    if eyewear_only:
+        query = query.filter(
+            Product.category.in_([ProductCategory.OPTICAL_FRAMES, ProductCategory.SUNGLASSES])
+        )
+    elif category:
         query = query.filter(Product.category == category)
 
     if q:
@@ -104,6 +111,8 @@ def list_products(
         query = query.filter(Product.color_description.ilike(color.strip()))
     if is_bestseller is not None:
         query = query.filter(Product.is_bestseller == is_bestseller)
+    if is_featured is not None:
+        query = query.filter(Product.is_featured == is_featured)
 
     # Dynamic Price Tier Filtering
     if tier:
@@ -135,7 +144,7 @@ def list_products(
 @router.get("/admin/catalog", response_model=PaginatedCatalogResponse)
 def get_admin_product_catalog(
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=25, ge=1, le=100),
+    page_size: int = Query(default=24, ge=1, le=100),
     search: Optional[str] = Query(default=None),
     brand: Optional[str] = Query(default=None),
     shape: Optional[str] = Query(default=None),
@@ -210,7 +219,7 @@ def create_product(
     """
     Add a new product to the catalog (Admin only).
     """
-    new_product = Product(**product_in.dict())
+    new_product = Product(**product_in.model_dump() if hasattr(product_in, 'model_dump') else product_in.dict())
     db.add(new_product)
     db.commit()
     db.refresh(new_product)
@@ -234,7 +243,7 @@ def update_product(
             detail=f"Product '{identifier}' not found."
         )
 
-    update_data = product_in.dict(exclude_unset=True)
+    update_data = product_in.model_dump(exclude_unset=True) if hasattr(product_in, 'model_dump') else product_in.dict(exclude_unset=True)
     for field, value in update_data.items():
         setattr(product, field, value)
 
