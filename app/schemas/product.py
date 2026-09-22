@@ -1,4 +1,4 @@
-#app/schemas/product.py
+# app/schemas/product.py
 
 from pydantic import BaseModel, Field
 from typing import Optional, List
@@ -101,3 +101,42 @@ class ProductResponse(ProductBase):
 
     class Config:
         from_attributes = True
+
+# ==========================================
+# SEARCH, AUTOCOMPLETE & FACET SCHEMAS
+# ==========================================
+
+class CatalogFacets(BaseModel):
+    min_price: float = 0.0
+    max_price: float = 0.0
+    available_brands: List[str] = Field(default_factory=list)
+    available_shapes: List[str] = Field(default_factory=list)
+    available_materials: List[str] = Field(default_factory=list)
+    available_genders: List[str] = Field(default_factory=list)
+
+class PaginatedCatalogWithFacetsResponse(BaseModel):
+    items: List[ProductResponse]
+    total_count: int
+    page: int
+    page_size: int
+    total_pages: int
+    facets: CatalogFacets
+    did_you_mean: Optional[str] = None
+    original_query: Optional[str] = None
+
+class BrandSuggestionItem(BaseModel):
+    name: str
+    slug: str
+    logo_url: Optional[str] = None
+
+class ProductSuggestionItem(BaseModel):
+    id: int
+    name: str
+    brand: str
+    image_url: str
+    price_full_gbp: float
+
+class SearchSuggestionsResponse(BaseModel):
+    categories: List[str] = Field(default_factory=list)
+    brands: List[BrandSuggestionItem] = Field(default_factory=list)
+    products: List[ProductSuggestionItem] = Field(default_factory=list)
