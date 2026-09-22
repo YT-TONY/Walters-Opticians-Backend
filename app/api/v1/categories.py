@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 import shutil
 import os
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import List, Optional
 
 from app.api import deps
@@ -11,7 +12,8 @@ from app.schemas.category import (
     CategoryCreate, CategoryUpdate, CategoryResponse,
     SubCategoryCreate, SubCategoryUpdate, SubCategoryResponse,
     BrandCreate, BrandUpdate, BrandResponse,
-    MegaMenuBannerResponse, MegaMenuBannerCreate, RecommendedBrandResponse
+    MegaMenuBannerResponse, MegaMenuBannerCreate, RecommendedBrandResponse,
+    FYPRecommendationsResponse, ContactSlotResponse
 )
 
 UPLOAD_DIR = "public/IMAGES/BRAND LOGO"
@@ -54,7 +56,6 @@ async def upload_brand_logo(
     if not db_brand:
         raise HTTPException(status_code=404, detail="Brand not found")
 
-    # Generate standardized filename
     filename = f"{db_brand.slug}_logo.png"
     file_path = os.path.join(UPLOAD_DIR, filename)
 
@@ -62,7 +63,6 @@ async def upload_brand_logo(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # Update logo URL path
     db_brand.logo_url = f"/IMAGES/BRAND LOGO/{filename}"
     db.commit()
     db.refresh(db_brand)
@@ -103,7 +103,7 @@ async def upload_brand_hero(
 
 @router.get("/brands/all", response_model=List[BrandResponse])
 def get_all_brands(
-    category_type: Optional[str] = None,  # "glasses", "sunglasses", or None for all
+    category_type: Optional[str] = None,
     top_only: bool = False,
     db: Session = Depends(deps.get_db)
 ):
@@ -124,73 +124,137 @@ def get_all_brands(
     return query.all()
 
 
-@router.get("/brands/recommended", response_model=List[RecommendedBrandResponse])
+@router.get("/brands/recommended", response_model=FYPRecommendationsResponse)
 def get_recommended_brands(
-    user_searches: Optional[str] = None,  # Comma-separated search terms or slugs
+    user_searches: Optional[str] = None,
     db: Session = Depends(deps.get_db)
 ):
     """
-    Computes personalized brand recommendations based on user search activity
-    combined with overall sales volume. Uses dynamic admin database fields.
+    Computes dynamic FYP brand recommendations:
+    - Main Eyewear Hero & Top Right Eyewear slots score Eyewear Brands based on user search activity & sales volume.
+    - Contact Lens Slot (Bottom Right): Checks if user has searched for contact lens keywords.
+      If YES -> Serves personalized top-sales contact lens brand.
+      If NO -> Triggers Cold-Start generic CTA ("Check Out Our Contact Lenses").
     """
-    searched_slugs = []
+    searched_terms = []
     if user_searches:
-        searched_slugs = [s.strip().lower() for s in user_searches.split(",") if s.strip()]
+        searched_terms = [s.strip().lower() for s in user_searches.split(",") if s.strip()]
 
-    recommended_brands = []
+    # Keywords that indicate contact lens intent
+    CONTACT_KEYWORDS = {"contact", "contacts", "lens", "lenses", "acuvue", "optix", "dailies", "biofinity", "alcon", "bausch"}
+    has_contact_intent = any(
+        any(kw in term for kw in CONTACT_KEYWORDS) for term in searched_terms
+    )
 
-    # 1. Match brands based on search history keywords or slugs
-    if searched_slugs:
-        for query_term in searched_slugs[:3]:
-            matched = db.query(Brand).filter(
-                (Brand.slug.ilike(f"%{query_term}%")) | (Brand.name.ilike(f"%{query_term}%"))
+    # 1. QUERY EYEWEAR BRANDS (Glasses / Sunglasses / Both)
+    eyewear_query = db.query(Brand).filter(Brand.category_type != "contact_lenses")
+    matched_eyewear = []
+
+    if searched_terms:
+        for term in searched_terms:
+            matched = eyewear_query.filter(
+                or_(Brand.slug.ilike(f"%{term}%"), Brand.name.ilike(f"%{term}%"))
             ).first()
-            if matched and matched not in recommended_brands:
-                recommended_brands.append(matched)
+            if matched and matched not in matched_eyewear:
+                matched_eyewear.append(matched)
 
-    # 2. Backfill up to 3 items using top sales_count and popular status
-    if len(recommended_brands) < 3:
-        existing_ids = {b.id for b in recommended_brands}
-        fallback_query = db.query(Brand)
-        if existing_ids:
-            fallback_query = fallback_query.filter(Brand.id.not_in(existing_ids))
-        
-        top_sales = fallback_query.order_by(
-            Brand.sales_count.desc(), 
-            Brand.is_popular.desc()
-        ).limit(3 - len(recommended_brands)).all()
-        
-        recommended_brands.extend(top_sales)
+    # Backfill Eyewear Brands by top sales_count & popularity
+    if len(matched_eyewear) < 2:
+        existing_ids = {b.id for b in matched_eyewear}
+        fallback_eyewear = eyewear_query.filter(
+            Brand.id.not_in(existing_ids) if existing_ids else True
+        ).order_by(Brand.sales_count.desc(), Brand.is_popular.desc()).limit(2 - len(matched_eyewear)).all()
+        matched_eyewear.extend(fallback_eyewear)
 
-    # Default fallback images if admin hasn't configured custom hero_image_url or tagline yet
-    DEFAULT_HEROES = [
-        "/IMAGES/HOMEPAGE/LUXURY_BANNER.jpg",
-        "/IMAGES/HOMEPAGE/BUDGET_BANNER.jpg",
-        "/IMAGES/HOMEPAGE/DISCOUNT_BANNER.jpg"
-    ]
+    main_brand = matched_eyewear[0] if len(matched_eyewear) > 0 else db.query(Brand).first()
+    top_right_brand = matched_eyewear[1] if len(matched_eyewear) > 1 else main_brand
 
-    result = []
-    for idx, brand in enumerate(recommended_brands[:3]):
-        # Dynamic precedence: Admin database field -> Fallback local asset
-        hero_url = brand.hero_image_url or DEFAULT_HEROES[idx % len(DEFAULT_HEROES)]
-        tagline_str = brand.tagline or f"Explore Precision Crafted {brand.name} Eyewear"
+    # Helper for generic tagline generation
+    def get_tagline(b: Brand) -> str:
+        return b.tagline or f"Discover precision-crafted collections from {b.name}."
 
-        result.append(
-            RecommendedBrandResponse(
-                id=brand.id,
-                name=brand.name,
-                slug=brand.slug,
-                logo_url=brand.logo_url,
-                hero_image_url=hero_url,
-                tagline=tagline_str,
-                category_type=brand.category_type or "both",
-                sales_count=brand.sales_count,
-                is_popular=brand.is_popular,
-                badge_text=brand.promo_tag or ("RECOMMENDED" if idx == 0 else "POPULAR")
+    main_eyewear_res = RecommendedBrandResponse(
+        id=main_brand.id if main_brand else 0,
+        name=main_brand.name if main_brand else "Tom Ford",
+        slug=main_brand.slug if main_brand else "tom-ford",
+        logo_url=main_brand.logo_url if main_brand else None,
+        hero_image_url=main_brand.hero_image_url if main_brand else None,
+        tagline=get_tagline(main_brand) if main_brand else "Discover luxury eyewear.",
+        category_type=main_brand.category_type if main_brand else "both",
+        sales_count=main_brand.sales_count if main_brand else 0,
+        is_popular=main_brand.is_popular if main_brand else True,
+        badge_text=main_brand.promo_tag or "TOP FEATURED"
+    )
+
+    top_right_res = RecommendedBrandResponse(
+        id=top_right_brand.id if top_right_brand else 0,
+        name=top_right_brand.name if top_right_brand else "Ray-Ban",
+        slug=top_right_brand.slug if top_right_brand else "ray-ban",
+        logo_url=top_right_brand.logo_url if top_right_brand else None,
+        hero_image_url=top_right_brand.hero_image_url if top_right_brand else None,
+        tagline=get_tagline(top_right_brand) if top_right_brand else "Discover iconic eyewear.",
+        category_type=top_right_brand.category_type if top_right_brand else "both",
+        sales_count=top_right_brand.sales_count if top_right_brand else 0,
+        is_popular=top_right_brand.is_popular if top_right_brand else True,
+        badge_text=top_right_brand.promo_tag or "POPULAR PICK"
+    )
+
+    # 2. COMPUTE CONTACT LENS SLOT
+    contact_brand = None
+    if has_contact_intent:
+        contact_query = db.query(Brand).filter(
+            or_(
+                Brand.category_type == "contact_lenses",
+                Brand.name.ilike("%optix%"),
+                Brand.name.ilike("%acuvue%"),
+                Brand.name.ilike("%dailies%"),
+                Brand.name.ilike("%biofinity%"),
+                Brand.name.ilike("%alcon%")
             )
         )
+        # Match term or get highest sales contact brand
+        for term in searched_terms:
+            contact_brand = contact_query.filter(
+                or_(Brand.slug.ilike(f"%{term}%"), Brand.name.ilike(f"%{term}%"))
+            ).first()
+            if contact_brand:
+                break
+        
+        if not contact_brand:
+            contact_brand = contact_query.order_by(Brand.sales_count.desc()).first()
 
-    return result
+    if has_contact_intent and contact_brand:
+        contact_slot = ContactSlotResponse(
+            is_personalized=True,
+            id=contact_brand.id,
+            name=contact_brand.name,
+            slug=contact_brand.slug,
+            logo_url=contact_brand.logo_url,
+            hero_image_url=contact_brand.hero_image_url,
+            tagline=get_tagline(contact_brand),
+            badge_text=contact_brand.promo_tag or "RECOMMENDED CONTACTS",
+            category_type="contact_lenses"
+        )
+    else:
+        # COLD START: User has never searched for contacts
+        contact_slot = ContactSlotResponse(
+            is_personalized=False,
+            id=None,
+            name="Check Out Our Contact Lenses",
+            slug="contact_lenses",
+            logo_url=None,
+            hero_image_url=None,
+            tagline="Discover daily disposables, monthly lenses, and precision optical solutions.",
+            badge_text="EXPLORE CONTACTS",
+            category_type="contact_lenses"
+        )
+
+    return FYPRecommendationsResponse(
+        main_eyewear=main_eyewear_res,
+        top_right_eyewear=top_right_res,
+        contact_slot=contact_slot
+    )
+
 
 # ==========================================
 # MEGA-MENU BANNERS (ADMIN CONTROLLED)

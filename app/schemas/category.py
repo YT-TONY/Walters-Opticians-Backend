@@ -49,6 +49,23 @@ class RecommendedBrandResponse(BaseModel):
     badge_text: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
+# --- STRUCTURED FYP RECOMMENDATIONS SCHEMAS ---
+class ContactSlotResponse(BaseModel):
+    is_personalized: bool
+    id: Optional[int] = None
+    name: str
+    slug: str
+    logo_url: Optional[str] = None
+    hero_image_url: Optional[str] = None
+    tagline: Optional[str] = None
+    badge_text: str
+    category_type: str = "contact_lenses"
+
+class FYPRecommendationsResponse(BaseModel):
+    main_eyewear: RecommendedBrandResponse
+    top_right_eyewear: RecommendedBrandResponse
+    contact_slot: ContactSlotResponse
+
 
 # --- SUBCATEGORY SCHEMAS ---
 class SubCategoryBase(BaseModel):
@@ -110,4 +127,3 @@ class MegaMenuBannerCreate(MegaMenuBannerBase):
 class MegaMenuBannerResponse(MegaMenuBannerBase):
     id: int
     model_config = ConfigDict(from_attributes=True)
-    
