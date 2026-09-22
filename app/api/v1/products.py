@@ -1,16 +1,26 @@
-# app/api/v1/products.py
+import difflib
 from typing import List, Optional
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, and_, case, distinct
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_db, require_admin
 from app.models.enums import ProductCategory
 from app.models.product import Product
-from app.schemas.product import ProductCreate, ProductResponse, ProductUpdate
+from app.models.categories import Brand, Category
+from app.schemas.product import (
+    ProductCreate, 
+    ProductResponse, 
+    ProductUpdate,
+    PaginatedCatalogWithFacetsResponse,
+    CatalogFacets,
+    SearchSuggestionsResponse,
+    BrandSuggestionItem,
+    ProductSuggestionItem
+)
 
 router = APIRouter(prefix="/products", tags=["Products & Catalog"])
 
@@ -47,7 +57,106 @@ def find_product(identifier: str, db: Session) -> Optional[Product]:
 
 
 # ==========================================
-# PUBLIC CATALOG ENDPOINTS
+# LIVE SEARCH AUTOCOMPLETE OVERLAY
+# ==========================================
+
+
+@router.get("/search/suggest", response_model=SearchSuggestionsResponse)
+def get_search_suggestions(
+    q: str = Query(..., min_length=1, description="Raw user search query"),
+    db: Session = Depends(get_db)
+):
+    """
+    Powers the dynamic header search overlay menu:
+    1. Matches categories starting with query prefix.
+    2. Matches brands with prefix or word boundary ('G%' or '% G%').
+    3. Matches top 6 product titles with prefix ranking.
+    """
+    clean_q = q.strip()
+    if not clean_q:
+        return SearchSuggestionsResponse(categories=[], brands=[], products=[])
+
+    prefix_pattern = f"{clean_q}%"
+    word_boundary_pattern = f"% {clean_q}%"
+
+    # 1. MATCH CATEGORIES
+    matching_categories = []
+    category_enum_matches = [
+        cat.value for cat in ProductCategory 
+        if cat.value.lower().startswith(clean_q.lower()) or clean_q.lower() in cat.value.lower()
+    ]
+    matching_categories.extend(category_enum_matches)
+
+    # 2. MATCH BRANDS (Prefix first, word-boundary second)
+    brand_matches = (
+        db.query(Brand)
+        .filter(
+            or_(
+                Brand.name.ilike(prefix_pattern),
+                Brand.name.ilike(word_boundary_pattern)
+            )
+        )
+        .order_by(
+            case((Brand.name.ilike(prefix_pattern), 1), else_=2),
+            Brand.sales_count.desc()
+        )
+        .limit(6)
+        .all()
+    )
+
+    brand_suggestions = [
+        BrandSuggestionItem(
+            name=b.name,
+            slug=b.slug,
+            logo_url=b.logo_url
+        ) for b in brand_matches
+    ]
+
+    # 3. MATCH PRODUCTS
+    product_matches = (
+        db.query(
+            Product.id,
+            Product.name,
+            Product.brand,
+            Product.image_url,
+            Product.price_full_gbp
+        )
+        .filter(
+            Product.is_active == True,
+            or_(
+                Product.name.ilike(prefix_pattern),
+                Product.name.ilike(word_boundary_pattern),
+                Product.brand.ilike(prefix_pattern),
+                Product.model_code.ilike(prefix_pattern)
+            )
+        )
+        .order_by(
+            case((Product.name.ilike(prefix_pattern), 1), else_=2),
+            Product.id.desc()
+        )
+        .limit(6)
+        .all()
+    )
+
+    product_suggestions = [
+        ProductSuggestionItem(
+            id=p.id,
+            name=p.name,
+            brand=p.brand,
+            image_url=p.image_url,
+            price_full_gbp=p.price_full_gbp
+        ) for p in product_matches
+    ]
+
+    return SearchSuggestionsResponse(
+        categories=matching_categories,
+        brands=brand_suggestions,
+        products=product_suggestions
+    )
+
+
+# ==========================================
+# PUBLIC CATALOG ENDPOINTS (WITH FACETS)
 # ==========================================
 
 
@@ -61,14 +170,19 @@ def list_available_brands(db: Session = Depends(get_db)):
     return brands
 
 
-@router.get("/", response_model=List[ProductResponse])
+@router.get("/catalog", response_model=PaginatedCatalogWithFacetsResponse)
+@router.get("/", response_model=PaginatedCatalogWithFacetsResponse)
 def list_products(
     q: Optional[str] = Query(None, description="Search term for name, brand, shape, or color"),
-    category: Optional[ProductCategory] = Query(None, description="Filter by category: optical_frames, sunglasses, contact_lenses, lens_care"),
-    eyewear_only: bool = Query(False, description="If True, strictly returns Optical Frames & Sunglasses (excludes contact lenses & lens care)"),
+    category: Optional[str] = Query(None, description="Filter by category: optical_frames, sunglasses, contact_lenses, lens_care"),
+    eyewear_only: bool = Query(False, description="If True, strictly returns Optical Frames & Sunglasses"),
     brand: Optional[str] = Query(None, description="Filter by brand name"),
+    gender: Optional[str] = Query(None, description="Filter by gender (male, female, unisex)"),
     shape: Optional[str] = Query(None, description="Filter by frame shape"),
     color: Optional[str] = Query(None, description="Filter by color description"),
+    frame_material: Optional[str] = Query(None, description="Filter by frame material"),
+    min_lens_width: Optional[float] = Query(None, description="Minimum lens width in mm"),
+    max_lens_width: Optional[float] = Query(None, description="Maximum lens width in mm"),
     tier: Optional[str] = Query(None, description="Filter tier: luxury, bridge, budget"),
     is_bestseller: Optional[bool] = Query(None, description="Filter bestseller items"),
     is_featured: Optional[bool] = Query(None, description="Filter featured items"),
@@ -76,69 +190,163 @@ def list_products(
     max_price: Optional[float] = Query(None, description="Maximum price filter in GBP"),
     in_stock_only: bool = Query(False, description="Filter only products currently in stock"),
     sort_by: Optional[str] = Query("newest", description="Sort order: price_asc, price_desc, newest"),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=500),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(24, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
     """
-    Retrieve products catalog with multi-attribute filtering, search, category filtering, and server-side pagination.
-    Eagerly loads contact lens metadata.
+    High-performance catalog endpoint with:
+    - Server-side pagination (`page` & `page_size`)
+    - Dynamic SQLite aggregate facet calculation (`min_price`, `max_price`, distinct values)
+    - Prefix & word-boundary search ranking
+    - Automatic "Did You Mean?" fuzzy fallback using Python difflib
     """
-    query = db.query(Product).options(joinedload(Product.contact_lens_detail)).filter(Product.is_active == True)
+    def build_filtered_query(search_term: Optional[str]):
+        base_query = db.query(Product).options(joinedload(Product.contact_lens_detail)).filter(Product.is_active == True)
 
-    # Filter out Contact Lenses & Lens Care if eyewear_only is True
-    if eyewear_only:
-        query = query.filter(
-            Product.category.in_([ProductCategory.OPTICAL_FRAMES, ProductCategory.SUNGLASSES])
+        if eyewear_only:
+            base_query = base_query.filter(
+                Product.category.in_([ProductCategory.OPTICAL_FRAMES, ProductCategory.SUNGLASSES])
+            )
+        elif category and category.lower() != "all":
+            clean_cat = category.lower().strip()
+            matched_enum = None
+            for e in ProductCategory:
+                if e.value.lower() == clean_cat or e.name.lower() == clean_cat:
+                    matched_enum = e
+                    break
+            if matched_enum:
+                base_query = base_query.filter(Product.category == matched_enum)
+
+        if search_term:
+            clean_term = search_term.strip()
+            prefix_pat = f"{clean_term}%"
+            boundary_pat = f"% {clean_term}%"
+            contains_pat = f"%{clean_term}%"
+
+            base_query = base_query.filter(
+                or_(
+                    Product.name.ilike(prefix_pat),
+                    Product.name.ilike(boundary_pat),
+                    Product.brand.ilike(prefix_pat),
+                    Product.brand.ilike(boundary_pat),
+                    Product.model_code.ilike(prefix_pat),
+                    Product.color_description.ilike(contains_pat),
+                    Product.shape.ilike(contains_pat)
+                )
+            )
+
+        if brand and brand.lower() != "all":
+            base_query = base_query.filter(Product.brand.ilike(brand.strip()))
+        if gender and gender.lower() != "all":
+            base_query = base_query.filter(or_(Product.gender.ilike(gender.strip()), Product.gender.ilike("unisex")))
+        if shape and shape.lower() != "all":
+            base_query = base_query.filter(Product.shape.ilike(shape.strip()))
+        if color:
+            base_query = base_query.filter(Product.color_description.ilike(f"%{color.strip()}%"))
+        if frame_material:
+            base_query = base_query.filter(Product.frame_material.ilike(f"%{frame_material.strip()}%"))
+        if min_lens_width is not None:
+            base_query = base_query.filter(Product.lens_width >= min_lens_width)
+        if max_lens_width is not None:
+            base_query = base_query.filter(Product.lens_width <= max_lens_width)
+        if is_bestseller is not None:
+            base_query = base_query.filter(Product.is_bestseller == is_bestseller)
+        if is_featured is not None:
+            base_query = base_query.filter(Product.is_featured == is_featured)
+
+        if tier:
+            tier_lower = tier.lower().strip()
+            if tier_lower == "luxury":
+                base_query = base_query.filter(Product.price_full_gbp >= 200.0)
+            elif tier_lower == "budget":
+                base_query = base_query.filter(Product.price_full_gbp <= 100.0)
+            elif tier_lower == "bridge":
+                base_query = base_query.filter(Product.price_full_gbp > 100.0, Product.price_full_gbp < 200.0)
+
+        if min_price is not None:
+            base_query = base_query.filter(Product.price_full_gbp >= min_price)
+        if max_price is not None:
+            base_query = base_query.filter(Product.price_full_gbp <= max_price)
+        if in_stock_only:
+            base_query = base_query.filter(Product.stock_quantity > 0)
+
+        return base_query
+
+    # 1. EXECUTE PRIMARY FILTER QUERY
+    active_search_term = q
+    did_you_mean_suggestion = None
+    query = build_filtered_query(active_search_term)
+    total_count = query.count()
+
+    # 2. TRIGGER "DID YOU MEAN?" FALLBACK IF 0 RESULTS RETURNED
+    if total_count == 0 and q and q.strip():
+        distinct_brands = [b[0] for b in db.query(Product.brand).filter(Product.brand.isnot(None)).distinct().all() if b[0]]
+        distinct_categories = [c.value for c in ProductCategory]
+        corpus = distinct_brands + distinct_categories
+
+        matches = difflib.get_close_matches(q.strip(), corpus, n=1, cutoff=0.55)
+        if matches:
+            did_you_mean_suggestion = matches[0]
+            # Re-run query using suggested brand/category correction
+            query = build_filtered_query(did_you_mean_suggestion)
+            total_count = query.count()
+
+    # 3. APPLY SORTING
+    if active_search_term and active_search_term.strip():
+        prefix_pat = f"{active_search_term.strip()}%"
+        query = query.order_by(
+            case((Product.brand.ilike(prefix_pat), 1), else_=2),
+            case((Product.name.ilike(prefix_pat), 1), else_=2),
+            Product.id.desc()
         )
-    elif category:
-        query = query.filter(Product.category == category)
-
-    if q:
-        search_pattern = f"%{q.strip()}%"
-        query = query.filter(
-            (Product.name.ilike(search_pattern)) |
-            (Product.brand.ilike(search_pattern)) |
-            (Product.shape.ilike(search_pattern)) |
-            (Product.color_description.ilike(search_pattern))
-        )
-
-    if brand:
-        query = query.filter(Product.brand.ilike(brand.strip()))
-    if shape:
-        query = query.filter(Product.shape.ilike(shape.strip()))
-    if color:
-        query = query.filter(Product.color_description.ilike(color.strip()))
-    if is_bestseller is not None:
-        query = query.filter(Product.is_bestseller == is_bestseller)
-    if is_featured is not None:
-        query = query.filter(Product.is_featured == is_featured)
-
-    # Dynamic Price Tier Filtering
-    if tier:
-        tier_lower = tier.lower().strip()
-        if tier_lower == "luxury":
-            query = query.filter(Product.price_full_gbp >= 200.0)
-        elif tier_lower == "budget":
-            query = query.filter(Product.price_full_gbp <= 100.0)
-        elif tier_lower == "bridge":
-            query = query.filter(Product.price_full_gbp > 100.0, Product.price_full_gbp < 200.0)
-
-    if min_price is not None:
-        query = query.filter(Product.price_full_gbp >= min_price)
-    if max_price is not None:
-        query = query.filter(Product.price_full_gbp <= max_price)
-    if in_stock_only:
-        query = query.filter(Product.stock_quantity > 0)
-
-    if sort_by == "price_asc":
+    elif sort_by == "price_asc":
         query = query.order_by(Product.price_full_gbp.asc())
     elif sort_by == "price_desc":
         query = query.order_by(Product.price_full_gbp.desc())
     else:
         query = query.order_by(Product.id.desc())
 
-    return query.offset(skip).limit(limit).all()
+    # 4. EXECUTE PAGINATED PRODUCT FETCH
+    skip = (page - 1) * page_size
+    products = query.offset(skip).limit(page_size).all()
+    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+
+    # 5. SQL-LEVEL AGGREGATION FOR DYNAMIC FACETS & PRICE BOUNDS
+    facet_subquery = build_filtered_query(active_search_term if not did_you_mean_suggestion else did_you_mean_suggestion).subquery()
+    
+    price_stats = db.query(
+        func.min(facet_subquery.c.price_full_gbp),
+        func.max(facet_subquery.c.price_full_gbp)
+    ).first()
+
+    calc_min_price = float(price_stats[0]) if price_stats and price_stats[0] is not None else 0.0
+    calc_max_price = float(price_stats[1]) if price_stats and price_stats[1] is not None else 0.0
+
+    facet_brands = [r[0] for r in db.query(distinct(facet_subquery.c.brand)).all() if r[0]]
+    facet_shapes = [r[0] for r in db.query(distinct(facet_subquery.c.shape)).all() if r[0]]
+    facet_materials = [r[0] for r in db.query(distinct(facet_subquery.c.frame_material)).all() if r[0]]
+    facet_genders = [r[0] for r in db.query(distinct(facet_subquery.c.gender)).all() if r[0]]
+
+    facets = CatalogFacets(
+        min_price=calc_min_price,
+        max_price=calc_max_price,
+        available_brands=sorted(facet_brands),
+        available_shapes=sorted(facet_shapes),
+        available_materials=sorted(facet_materials),
+        available_genders=sorted(facet_genders)
+    )
+
+    return PaginatedCatalogWithFacetsResponse(
+        items=products,
+        total_count=total_count,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        facets=facets,
+        did_you_mean=did_you_mean_suggestion,
+        original_query=q if did_you_mean_suggestion else None
+    )
 
 
 @router.get("/admin/catalog", response_model=PaginatedCatalogResponse)
@@ -177,7 +385,6 @@ def get_admin_product_catalog(
 
     products = query.order_by(Product.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
-    # Extract dynamic brands from database
     brand_results = db.query(Product.brand).filter(Product.brand.isnot(None), Product.brand != "").distinct().all()
     available_brands = sorted([b[0] for b in brand_results if b[0]])
 
