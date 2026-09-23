@@ -1,3 +1,5 @@
+#app/api/v1/products.py
+
 import difflib
 from typing import List, Optional
 from urllib.parse import unquote
@@ -34,17 +36,7 @@ class PaginatedCatalogResponse(BaseModel):
     available_brands: List[str]
 
 
-# ==========================================
-# FLEXIBLE LOOKUP HELPER
-# ==========================================
-
-
 def find_product(identifier: str, db: Session) -> Optional[Product]:
-    """
-    Finds a product by numeric ID if identifier contains digits, 
-    otherwise falls back to a case-insensitive exact name match (URL-decoded).
-    Eagerly loads contact_lens_detail.
-    """
     clean_identifier = unquote(identifier).strip()
     query = db.query(Product).options(joinedload(Product.contact_lens_detail))
 
@@ -56,22 +48,11 @@ def find_product(identifier: str, db: Session) -> Optional[Product]:
     return query.filter(Product.name.ilike(clean_identifier)).first()
 
 
-# ==========================================
-# LIVE SEARCH AUTOCOMPLETE OVERLAY
-# ==========================================
-
-
 @router.get("/search/suggest", response_model=SearchSuggestionsResponse)
 def get_search_suggestions(
     q: str = Query(..., min_length=1, description="Raw user search query"),
     db: Session = Depends(get_db)
 ):
-    """
-    Powers the dynamic header search overlay menu:
-    1. Matches categories starting with query prefix.
-    2. Matches brands with prefix or word boundary ('G%' or '% G%').
-    3. Matches top 6 product titles with prefix ranking.
-    """
     clean_q = q.strip()
     if not clean_q:
         return SearchSuggestionsResponse(categories=[], brands=[], products=[])
@@ -79,15 +60,11 @@ def get_search_suggestions(
     prefix_pattern = f"{clean_q}%"
     word_boundary_pattern = f"% {clean_q}%"
 
-    # 1. MATCH CATEGORIES
-    matching_categories = []
-    category_enum_matches = [
+    matching_categories = [
         cat.value for cat in ProductCategory 
         if cat.value.lower().startswith(clean_q.lower()) or clean_q.lower() in cat.value.lower()
     ]
-    matching_categories.extend(category_enum_matches)
 
-    # 2. MATCH BRANDS (Prefix first, word-boundary second)
     brand_matches = (
         db.query(Brand)
         .filter(
@@ -112,7 +89,6 @@ def get_search_suggestions(
         ) for b in brand_matches
     ]
 
-    # 3. MATCH PRODUCTS
     product_matches = (
         db.query(
             Product.id,
@@ -155,52 +131,36 @@ def get_search_suggestions(
     )
 
 
-# ==========================================
-# PUBLIC CATALOG ENDPOINTS (WITH FACETS)
-# ==========================================
-
-
 @router.get("/brands", response_model=List[str])
 def list_available_brands(db: Session = Depends(get_db)):
-    """
-    Fetches all distinct brand names currently present in the database catalog.
-    """
     results = db.query(Product.brand).filter(Product.brand.isnot(None), Product.brand != "").distinct().all()
-    brands = sorted([r[0] for r in results if r[0]])
-    return brands
+    return sorted([r[0] for r in results if r[0]])
 
 
 @router.get("/catalog", response_model=PaginatedCatalogWithFacetsResponse)
 @router.get("/", response_model=PaginatedCatalogWithFacetsResponse)
 def list_products(
     q: Optional[str] = Query(None, description="Search term for name, brand, shape, or color"),
-    category: Optional[str] = Query(None, description="Filter by category: optical_frames, sunglasses, contact_lenses, lens_care"),
-    eyewear_only: bool = Query(False, description="If True, strictly returns Optical Frames & Sunglasses"),
+    category: Optional[str] = Query(None, description="Filter by category"),
+    eyewear_only: bool = Query(False, description="Strictly returns Optical Frames & Sunglasses"),
     brand: Optional[str] = Query(None, description="Filter by brand name"),
-    gender: Optional[str] = Query(None, description="Filter by gender (male, female, unisex)"),
+    gender: Optional[str] = Query(None, description="Filter by gender"),
     shape: Optional[str] = Query(None, description="Filter by frame shape"),
     color: Optional[str] = Query(None, description="Filter by color description"),
     frame_material: Optional[str] = Query(None, description="Filter by frame material"),
-    min_lens_width: Optional[float] = Query(None, description="Minimum lens width in mm"),
-    max_lens_width: Optional[float] = Query(None, description="Maximum lens width in mm"),
+    min_lens_width: Optional[float] = Query(None, description="Minimum lens width"),
+    max_lens_width: Optional[float] = Query(None, description="Maximum lens width"),
     tier: Optional[str] = Query(None, description="Filter tier: luxury, bridge, budget"),
     is_bestseller: Optional[bool] = Query(None, description="Filter bestseller items"),
     is_featured: Optional[bool] = Query(None, description="Filter featured items"),
-    min_price: Optional[float] = Query(None, description="Minimum price filter in GBP"),
-    max_price: Optional[float] = Query(None, description="Maximum price filter in GBP"),
-    in_stock_only: bool = Query(False, description="Filter only products currently in stock"),
+    min_price: Optional[float] = Query(None, description="Minimum price filter"),
+    max_price: Optional[float] = Query(None, description="Maximum price filter"),
+    in_stock_only: bool = Query(False, description="Filter only in-stock products"),
     sort_by: Optional[str] = Query("newest", description="Sort order: price_asc, price_desc, newest"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(24, ge=1, le=100),
+    page_size: int = Query(24, ge=1, le=500),
     db: Session = Depends(get_db)
 ):
-    """
-    High-performance catalog endpoint with:
-    - Server-side pagination (`page` & `page_size`)
-    - Dynamic SQLite aggregate facet calculation (`min_price`, `max_price`, distinct values)
-    - Prefix & word-boundary search ranking
-    - Automatic "Did You Mean?" fuzzy fallback using Python difflib
-    """
     def build_filtered_query(search_term: Optional[str]):
         base_query = db.query(Product).options(joinedload(Product.contact_lens_detail)).filter(Product.is_active == True)
 
@@ -273,13 +233,11 @@ def list_products(
 
         return base_query
 
-    # 1. EXECUTE PRIMARY FILTER QUERY
     active_search_term = q
     did_you_mean_suggestion = None
     query = build_filtered_query(active_search_term)
     total_count = query.count()
 
-    # 2. TRIGGER "DID YOU MEAN?" FALLBACK IF 0 RESULTS RETURNED
     if total_count == 0 and q and q.strip():
         distinct_brands = [b[0] for b in db.query(Product.brand).filter(Product.brand.isnot(None)).distinct().all() if b[0]]
         distinct_categories = [c.value for c in ProductCategory]
@@ -288,11 +246,9 @@ def list_products(
         matches = difflib.get_close_matches(q.strip(), corpus, n=1, cutoff=0.55)
         if matches:
             did_you_mean_suggestion = matches[0]
-            # Re-run query using suggested brand/category correction
             query = build_filtered_query(did_you_mean_suggestion)
             total_count = query.count()
 
-    # 3. APPLY SORTING
     if active_search_term and active_search_term.strip():
         prefix_pat = f"{active_search_term.strip()}%"
         query = query.order_by(
@@ -307,12 +263,10 @@ def list_products(
     else:
         query = query.order_by(Product.id.desc())
 
-    # 4. EXECUTE PAGINATED PRODUCT FETCH
     skip = (page - 1) * page_size
     products = query.offset(skip).limit(page_size).all()
     total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
 
-    # 5. SQL-LEVEL AGGREGATION FOR DYNAMIC FACETS & PRICE BOUNDS
     facet_subquery = build_filtered_query(active_search_term if not did_you_mean_suggestion else did_you_mean_suggestion).subquery()
     
     price_stats = db.query(
@@ -359,9 +313,6 @@ def get_admin_product_catalog(
     db: Session = Depends(get_db),
     admin=Depends(require_admin)
 ):
-    """
-    Optimized paginated query for large inventory sizes with dynamic brand list.
-    """
     query = db.query(Product).options(joinedload(Product.contact_lens_detail))
 
     if brand and brand.lower() != "all":
@@ -400,9 +351,6 @@ def get_admin_product_catalog(
 
 @router.get("/{identifier}", response_model=ProductResponse)
 def get_product(identifier: str, db: Session = Depends(get_db)):
-    """
-    Get detailed information for a specific product by numeric ID or exact Name.
-    """
     product = find_product(identifier, db)
     if not product:
         raise HTTPException(
@@ -412,20 +360,12 @@ def get_product(identifier: str, db: Session = Depends(get_db)):
     return product
 
 
-# ==========================================
-# ADMIN-ONLY PRODUCT MANAGEMENT
-# ==========================================
-
-
 @router.post("/", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 def create_product(
     product_in: ProductCreate,
     db: Session = Depends(get_db),
     admin=Depends(require_admin)
 ):
-    """
-    Add a new product to the catalog (Admin only).
-    """
     new_product = Product(**product_in.model_dump() if hasattr(product_in, 'model_dump') else product_in.dict())
     db.add(new_product)
     db.commit()
@@ -440,9 +380,6 @@ def update_product(
     db: Session = Depends(get_db),
     admin=Depends(require_admin)
 ):
-    """
-    Update product details dynamically by numeric ID or Name (Admin only).
-    """
     product = find_product(identifier, db)
     if not product:
         raise HTTPException(
@@ -465,9 +402,6 @@ def delete_product(
     db: Session = Depends(get_db),
     admin=Depends(require_admin)
 ):
-    """
-    Delete a product by numeric ID or Name (Admin only).
-    """
     product = find_product(identifier, db)
     if not product:
         raise HTTPException(
